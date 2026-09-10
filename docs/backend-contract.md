@@ -1,41 +1,35 @@
-# 私有后端接入边界
+# 私有 API 接入协议
 
-状态：前端示例阶段。没有声称后端已经实现，也没有调用、探测或发布任何私有服务器地址。
+客户端已实现并完成本地实际联调。公开配置保持 preview，直到有可用的公网 HTTPS 地址。
 
-## 部署分工
+## 连接与身份
 
-- GitHub Pages 只提供公开静态界面。
-- 后端在独立服务器提供公网 HTTPS 接口。
-- 工作进程在服务器调用私有求解器；程序、源码、许可证与密钥不进入前端构建。
-- `public/config.json` 是预留的公开配置，当前 `mode: preview`、`apiBaseUrl: ""`。当前应用不据此发起请求；未完成适配与验收前不应将它解释为可用的在线模式。
+- `config.json` 的 `apiBaseUrl` 是公开 HTTPS 基础地址，不含 `/api/v1`。
+- CORS 允许来源 `https://iliujin.github.io`，Origin 不包含仓库路径。
+- `POST /api/v1/sessions` 返回每位访客独立的随机 token 和 expiresAt。
+- 随后请求携带 `Authorization: Bearer ...`，不依赖第三方 Cookie，也不需要共享前端密钥。
+- 凭证保留在当前页面内存；新提交可以建立新会话，已有任务查询保持原身份。
 
-## 接入前需要确认
+## 路由
 
-1. 可访问的 HTTPS API 基础地址，以及允许的浏览器来源 `https://iliujin.github.io`（Origin 不含 `/nesting-demo/` 路径）。
-2. 实际接口文档与样例响应：创建访客会话、上传实例、提交任务、查询进度、取消、下载结果。
-3. 访客鉴权方案。若使用跨站 Cookie，需要明确 CORS credentials、SameSite/Secure、CSRF，并验证浏览器的第三方 Cookie 限制；可用自定义同站域名降低跨站会话兼容性问题。
-4. 限额与错误约定：上传大小、几何规模、求解时限、并发、队列容量、频率限制、文件保留期限。
-
-## 建议的任务式接口
-
-这些是待确认的集成方向，不是本前端已经实现或已经通过验证的远程接口。
-
-| 接口 | 职责 |
+| 路由 | 请求或响应 |
 | --- | --- |
-| POST `/api/v1/sessions` | 建立访客会话 |
-| POST `/api/v1/instances` | 接收并验证原始实例 |
-| POST `/api/v1/jobs` | 提交实例编号、模式和参数，返回 HTTP 202 与任务编号 |
-| GET `/api/v1/jobs/{id}` | 查询排队、运行、完成或失败状态 |
-| POST `/api/v1/jobs/{id}/cancel` | 取消指定任务 |
-| GET `/api/v1/jobs/{id}/result` | 返回容器尺寸和世界坐标中的零件轮廓 |
+| GET `/api/v1/health/ready` | 200 表示 API 与 Worker 就绪，503 表示未就绪 |
+| POST `/api/v1/sessions` | 201，`token`、`expiresAt` |
+| POST `/api/v1/instances` | JSON `{text}`；201，实例 `id`、名称、数量 |
+| POST `/api/v1/jobs` | `{instanceId,mode,width?,sizeFactor,timeLimitSeconds}`；202，任务状态 |
+| GET `/api/v1/jobs/{id}` | `id,status,hasResult,error,startedAt,finishedAt` |
+| POST `/api/v1/jobs/{id}/cancel` | 返回取消后的当前状态 |
+| GET `/api/v1/jobs/{id}/result` | 完整可行排样；没有结果时 409 |
 
-前端应在独立的 `src/lib/api.ts` 适配实际后端协议，不能向服务器传可执行路径或任意命令。当前 `Layout` 只是示例展示类型，不应直接认定它等于求解器结果协议；适配器需要检查字段、坐标、数量、旋转与坐标方向。
+模式：strip 或 bin。状态：queued、running、stopping、completed、failed、cancelled、timed_out、interrupted。完成状态不代表全局最优；超时或取消时可能仍有有效可行解。
 
-## 上线验收
+结果包括 `kind: solver_result`、`validated: true`、`name`、`mode`、`width`、`height`、`containers`、`placements`。每个 placement 包含整数 id、typeId、container（从 0 开始）、rotation 和世界坐标 polygon。strip 的 width 是实际使用长度，height 是请求的固定宽度。
 
-- 从 Pages 页面实际上传新实例，并确认服务器创建了任务。
-- 在服务器完成计算后展示真实结果，标注结束原因；失败时不能退回示例并冒充成功。
-- 网络断开、超时、429、取消和页面关闭都有明确行为。
-- 上传者之外的访客不能读取、取消或下载其任务。
-- 服务器校验所有输入，限制 CPU/内存/时间；CORS 不充当身份认证。
-- 前端产物中没有密钥、私有源码、求解器二进制或内部路径。
+额外元数据包括 jobId、status、elapsedSeconds、输入摘要和运行参数。后端采用保守的整数几何边界，`numericalGuardUnits` 记录对应数值边界；前端不重新求解。
+
+错误使用 `{detail: "可展示的信息"}`，不返回命令、日志或内部路径。身份失效 401，非本人或不存在的资源 404，参数错误 422，达到限额 429。
+
+## 限额
+
+单任务隔离执行，四 CPU 配额、1 GiB 内存、128 进程上限、无网络。全局一次运行一个任务；运行和排队合计最多 20 个，每访客最多 2 个未完成任务，每分钟最多提交 6 次，并有全局限额。原始求解日志始终留在私有服务端。

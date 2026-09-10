@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { Layout, Placement } from '../types'
 import { area, centroid, colors, numberText, pointsText } from '../lib/geometry'
-const props = defineProps<{ layout: Layout; container: number; labels: boolean }>()
+const props = defineProps<{ layout: Layout; container: number; labels: boolean; real?: boolean }>()
 const zoom = ref(1), selected = ref<number | null>(null), viewport = ref<HTMLElement>()
 const pieces = computed(() => props.layout.placements.filter(p => p.container === props.container))
 const selectedPiece = computed(() => pieces.value.find(p => p.id === selected.value))
@@ -16,7 +16,7 @@ defineExpose({ fit })
 <template>
   <div ref="viewport" class="canvas-viewport" aria-label="排样画布">
     <div class="canvas-stage" :style="{ width: `${zoom * 100}%`, height: `${zoom * 100}%` }">
-      <svg :viewBox="viewBox" class="layout-svg" role="group" :aria-label="`预计算示例：容器 ${container + 1}`">
+      <svg :viewBox="viewBox" class="layout-svg" role="group" :aria-label="`${real ? '真实排样结果' : '预计算示例'}：容器 ${container + 1}`">
         <g stroke="#8291a9" stroke-width="0.25" fill="none">
           <path :d="`M0,-4 V-7 M0,-5.5 H${layout.width} M${layout.width},-4 V-7`" />
           <path :d="`M-4,0 H-7 M-5.5,0 V${layout.height} M-4,${layout.height} H-7`" />
@@ -37,7 +37,7 @@ defineExpose({ fit })
     </div>
   </div>
   <div class="canvas-bottom">
-    <p class="caption" aria-live="polite">{{ selectedPiece ? `零件 ${selectedPiece.id} · 面积 ${numberText(area(selectedPiece.polygon))} · 旋转 ${selectedPiece.rotation}°` : '示例坐标仅用于功能展示，不代表求解器性能。' }}</p>
+    <p class="caption" aria-live="polite">{{ selectedPiece ? `零件 ${selectedPiece.id} · 面积 ${numberText(area(selectedPiece.polygon))} · 旋转 ${selectedPiece.rotation}°` : real ? '经几何校验的可行排样，未证明全局最优。' : '示例坐标仅用于功能展示，不代表求解器性能。' }}</p>
     <div class="zoom-controls" role="group" aria-label="画布缩放">
       <button class="icon-button" aria-label="缩小画布" :disabled="zoom <= 1" @click="zoom = Math.max(1, zoom - 0.25)"><svg viewBox="0 0 20 20"><path d="M5 10h10" /></svg></button>
       <span>{{ Math.round(zoom * 100) }}%</span>

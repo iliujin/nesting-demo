@@ -1,58 +1,51 @@
 # Nesting · 二维排样演示
 
-一个独立的公开演示前端，支持两种容器模式、示例排样可视化、TXT 零件预览和结果下载。求解器源代码、可执行程序和后端均不在本仓库。
+独立的公开前端。求解器源代码、程序、数据集、数据库和凭证均不在本仓库。
 
-演示网址（首次启用 Pages 后生效）：**https://iliujin.github.io/nesting-demo/**
+页面：https://iliujin.github.io/nesting-demo/
 
-## 当前能做什么
+## 当前状态
 
-- 查看无限长容器与固定容器的合成示例，切换容器、缩放、选择零件、显示编号。
-- 显示从坐标计算的零件数量、材料利用率、使用长度或容器数量。
-- 下载带有“预计算示例”说明的 SVG，以及包含完整坐标的 JSON。
-- 上传坐标行格式 TXT，在浏览器中预览自己的零件；可下载格式模板。
-- 使用桌面、手机或键盘访问工作台。
+已实现真实求解客户端：上传实例、设置模式和参数、提交任务、轮询、取消、显示排样、下载 SVG/JSON。客户端已通过本地浏览器到私有服务器的实际联调。
 
-**本版本没有连接真实求解服务。** 所有内置排样均为专门制作的合成展示数据，不代表算法效果或性能。上传文件只在当前浏览器内存中处理，不会发送到服务器，也不持久保存；刷新页面会清除上传内容。
+**公开部署目前仍使用 `preview` 配置，等待可用的公网 HTTPS API 地址。** 预览模式只展示合成示例和本地文件轮廓。不能把预览结果理解为在线求解结果。
 
-![工作台预览](docs/screenshots/desktop.png)
+在线模式中，点击“开始求解”才会将输入发给私有后端；内置示例也会实际计算。结果必须来自服务器并标记为经过校验的可行解，不承诺全局最优。
 
-## 本地运行
+![真实求解联调截图](docs/screenshots/live-desktop.png)
 
-使用 Node.js 24 和 npm。依赖版本固定在 `package-lock.json` 中。
+## 本地运行与验证
+
+使用 Node.js 24。依赖固定在 package-lock.json。
 
 ```bash
-git clone git@github.com:iliujin/nesting-demo.git
-cd nesting-demo
 npm ci
 npm run dev
-```
-
-打开终端显示的 `/nesting-demo/` 地址。
-
-```bash
 npm test
 npm run build
 npx playwright install chromium --only-shell
 npm run test:e2e
-npm run preview
 ```
 
-`npm run build` 包含 Vue/TypeScript 检查，产物在 `dist/`。TypeScript 固定为 5.9.3，因为当前 Vue 类型检查工具使用的编译器入口不兼容 TypeScript 7；升级时应重新验证。
+打开 `/nesting-demo/`。可在忽略的 `.env.local` 中填写 `NESTING_DEV_API_URL`，仅供本地开发服务器覆盖连接配置。开发页位于 localhost 或 127.0.0.1 时允许访问本机 HTTP 测试接口；公开页面始终要求 HTTPS。本地覆盖不会进入生产配置。
 
-## 首次启用 GitHub Pages
+设置环境变量 `REAL_API_URL` 后运行 `npm run test:e2e` 会额外执行真实服务器测试；未设置时明确跳过这些测试。普通 CI 使用接口夹具测试界面状态，不调用私有求解器。
 
-1. 打开 [仓库 Pages 设置](https://github.com/iliujin/nesting-demo/settings/pages)。
-2. 在 **Build and deployment → Source** 选择 **GitHub Actions**。
-3. 打开 [Actions](https://github.com/iliujin/nesting-demo/actions)，运行 **Verify and deploy demo → Run workflow → main**；如果已有运行在等待发布，待其结束或重新运行失败的部署。
-4. 成功后访问演示网址。后续推送 `main` 会自动检查并发布。
+## 配置公网求解
 
-工作流执行单元测试、类型检查、生产构建与桌面/手机交互测试。只上传 `dist/`；PR 运行检查但不部署。首次开通 Pages 需要仓库管理权限，默认工作流令牌不能代替管理员启用该功能。
+得到可访问的 HTTPS 后端后，修改 `public/config.json`：
 
-Vite 的 `base` 已设为 `/nesting-demo/`。更改仓库名称或使用自定义域名时同步修改 `vite.config.ts`。不需要把任何求解器仓库添加为 submodule，也不需要给本仓库配置私有仓库访问令牌。
+```json
+{"schemaVersion":1,"mode":"live","apiBaseUrl":"https://api.example.com"}
+```
 
-## 上传格式与边界
+`api.example.com` 是格式示例，需要替换为实际域名。地址末尾不包含 `/api/v1`。后端协议见 [接口说明](docs/backend-contract.md)。确认真实上传、取消、结果读取和跨域访问后，推送 main，GitHub Actions 会验证并发布。
 
-UTF-8 `.txt` 示例：
+接口地址和浏览器代码对访问者可见；不要在配置或前端环境变量中放共享密钥。每位访客的短期访问凭证由私有 API 单独签发。
+
+## 输入和结果
+
+支持坐标行 UTF-8 TXT，例如：
 
 ```text
 name: rectangle-and-triangle
@@ -60,23 +53,15 @@ size: 2
 object: width: 100
 no. quantity
 1 2 x 0 20 20 0
-    y 0 0 10 10
+y 0 0 10 10
 2 1 x 0 15 0
-    y 0 0 15
+y 0 0 15
 ```
 
-`size` 是零件类型数；可选数量决定每种零件出现几件。也支持 `no` 标头以及 `1 x ...` 这种默认一件的写法。每个 x 行后紧跟 y 行。支持负坐标、科学计数法、CRLF、空行与 `#` 注释；重复闭合顶点会移除。
+在线演示接受整数坐标 ±10,000；最多 100 种、500 件、单件 500 个顶点、展开后 10,000 个顶点。请求不超过 1 MiB。PIECE 分块、孔洞和 DXF 暂不支持。浏览器预览范围较宽，最终以服务器校验为准。
 
-上限为 1 MiB、500 件、单件 500 顶点、展开后 10,000 顶点、坐标绝对值 1,000,000。拒绝数量不匹配、自交、退化及非有限坐标。当前不支持 PIECE 分块、孔洞、DXF 或任意文件格式；缩略图独立缩放。
+无限长模式固定宽度，优化使用长度；演示要求宽度大于最大零件边长。固定容器使用最大零件边长乘以 1.1、1.5 或 2.0 的正方形。运行时间可选 30、60、120 秒，四种旋转角度为 0°、90°、180°、270°。
 
-浏览器检查只服务于预览，不能替代后端的几何和资源校验。
+SVG 和 JSON 导出区分合成示例与真实计算。真实结果在后端检查零件数量、形状、重叠和越界。任务与上传数据约保留 24 小时；关闭页面不会立即取消后台任务。
 
-## 接入私有后端
-
-见 [后端接入边界](docs/backend-contract.md)。`public/config.json` 预留了公开的 HTTPS 接口地址字段；**此版本不会读取它来开启求解**，仅修改配置不会产生在线计算能力。真实接口确认后，应实现独立适配器并验证上传、排队、查询、取消、下载完整流程。
-
-页面代码与接口地址可以被浏览器用户查看。密码、数据库连接、共享 API 密钥和求解器程序都必须留在后端。
-
-## 技术与验证
-
-Vue 3 + TypeScript + Vite；Vitest 测试几何与文件处理，Playwright 测试用户流程。详情见 [验证记录](docs/verification.md)。
+验证范围和剩余事项见 [验证记录](docs/verification.md)。

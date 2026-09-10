@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
+import LiveWorkbench from './components/LiveWorkbench.vue'
+import { loadConfig, type AppConfig } from './lib/api'
 import NestingCanvas from './components/NestingCanvas.vue'
 import PiecePreview from './components/PiecePreview.vue'
 import { area, numberText } from './lib/geometry'
@@ -7,6 +9,12 @@ import { parseInstance } from './lib/instances'
 import { sampleLayout, sampleOptions, sampleText } from './lib/samples'
 import { download, serializeSvg } from './lib/export'
 import type { Instance, Mode } from './types'
+
+const appConfig = ref<AppConfig | null>(null), configError = ref('')
+onMounted(async () => {
+  try { appConfig.value = await loadConfig() }
+  catch (err) { configError.value = (err as Error).message; appConfig.value = { mode: 'preview', apiBaseUrl: '' } }
+})
 
 const mode = ref<Mode>('strip'), source = ref<'sample' | 'upload'>('sample'), sampleId = ref('puzzle')
 const labels = ref(true), container = ref(0), resultVisible = ref(true)
@@ -56,6 +64,10 @@ function saveTemplate() { download('nesting-example.txt', sampleText(sampleId.va
 </script>
 
 <template>
+  <p v-if="!appConfig" class="status-message" role="status">正在加载工作台…</p>
+  <LiveWorkbench v-else-if="appConfig.mode === 'live'" :api-base-url="appConfig.apiBaseUrl" />
+  <template v-else>
+  <p v-if="configError" role="alert">{{ configError }} 当前仅提供示例预览。</p>
   <header class="site-header">
     <a class="brand" href="#main" aria-label="Nesting 工作台"><strong>Nesting</strong><span>二维排样演示</span></a>
     <nav aria-label="主导航">
@@ -141,4 +153,5 @@ function saveTemplate() { download('nesting-example.txt', sampleText(sampleId.va
     <p>真实求解尚未接入。后端需要独立的 HTTPS 服务，并在服务端校验输入、实施访问控制和资源限额。</p>
     <button class="primary-button" @click="help?.close()">开始体验</button>
   </dialog>
+  </template>
 </template>

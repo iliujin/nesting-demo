@@ -1,6 +1,10 @@
 import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/config.json', route => route.fulfill({ json: { mode: 'preview', apiBaseUrl: '' } }))
+})
+
 test('honest default, labels, selection, zoom and fit', async ({ page }, testInfo) => {
   const errors: string[] = []
   page.on('pageerror', error => errors.push(error.message))
