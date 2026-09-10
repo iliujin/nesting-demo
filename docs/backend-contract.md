@@ -26,7 +26,7 @@
 
 结果包括 `kind: solver_result`、`validated: true`、`name`、`mode`、`width`、`height`、`containers`、`placements`。每个 placement 包含整数 id、typeId、container（从 0 开始）、rotation 和世界坐标 polygon。strip 的 width 是实际使用长度，height 是请求的固定宽度。
 
-额外元数据包括 jobId、status、elapsedSeconds、输入摘要和运行参数。后端采用保守的整数几何边界，`numericalGuardUnits` 记录对应数值边界；前端不重新求解。
+额外元数据包括 jobId、status、elapsedSeconds、输入摘要和运行参数。零间隙版本返回 `clearance: 0`、`numericalGuardUnits: 0`，不对零件之间施加强制间距；边界接触合法，正面积重叠不合法。`placementGridUnits` 是坐标搜索网格（strip 为 1、bin 为 0.01，按输入坐标单位），不代表间距。前端不重新求解。
 
 错误使用 `{detail: "可展示的信息"}`，不返回命令、日志或内部路径。身份失效 401，非本人或不存在的资源 404，参数错误 422，达到限额 429。
 
