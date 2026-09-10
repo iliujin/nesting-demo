@@ -44,7 +44,7 @@ Files: `.github/workflows/pages.yml`, `README.md`, `docs/backend-contract.md`, `
 
 - [x] Run unit tests, typecheck/build and browser checks.
 - [x] Inspect generated concept and browser render with view_image; record copy/layout/typography/palette/geometry/responsive comparison.
-- [ ] Request independent review while finishing deployment documentation, fix material issues, and rerun affected checks.
+- [x] Request independent review while finishing deployment documentation, fix material issues, and rerun affected checks.
 - [x] Audit the tracked files and built assets for private content.
 - [ ] Commit only this repository, push the initial main branch and activate GitHub Pages if authenticated administration is available.
 - [ ] Verify the published site or report the exact remaining Pages setup step if administration is unavailable.
