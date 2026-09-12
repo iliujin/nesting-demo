@@ -2,6 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import NestingCanvas from './NestingCanvas.vue'
 import PiecePreview from './PiecePreview.vue'
+import OptimizationTrend from './OptimizationTrend.vue'
+import { addProgress, type ProgressPoint } from '../lib/progress'
 import { ApiError, SolverApi, type Job, type RealResult } from '../lib/api'
 import { parseInstance } from '../lib/instances'
 import { sampleOptions, sampleText } from '../lib/samples'
@@ -16,9 +18,11 @@ const width = ref(100), sizeFactor = ref(1.5), timeLimit = ref(60)
 const uploaded = ref<Instance | null>(null), uploadedText = ref(''), reading = ref(false)
 const result = ref<RealResult | null>(null), job = ref<Job | null>(null), submitting = ref(false), cancelling = ref(false)
 const fetchingResult = ref(false)
+const progress = ref<ProgressPoint[]>([]), progressElapsed = ref(0)
 const ready = ref(false), checking = ref(false), error = ref(''), message = ref(''), pollPaused = ref(false)
 const labels = ref(true), container = ref(0), help = ref<HTMLDialogElement>(), canvas = ref<InstanceType<typeof NestingCanvas>>()
 let timer: ReturnType<typeof setTimeout> | undefined, readVersion = 0, taskVersion = 0, pollVersion = 0, alive = true
+let progressAnchor = 0, progressSeconds = 0
 const active = computed(() => submitting.value || fetchingResult.value || (job.value && ['queued', 'running', 'stopping'].includes(job.value.status)))
 const instance = computed(() => source.value === 'sample' ? parseInstance(sampleText(sampleId.value)) : uploaded.value)
 const pieces = computed(() => instance.value?.pieces ?? [])
@@ -30,7 +34,7 @@ const stateLabel = computed(() => fetchingResult.value ? '正在加载结果' : 
 watch([mode, source, sampleId, width, sizeFactor, timeLimit], () => {
   if (active.value) return
   taskVersion++; pollVersion++;
-  result.value = null; job.value = null; container.value = 0; error.value = ''; message.value = ''
+  result.value = null; progress.value = []; progressElapsed.value = 0; job.value = null; container.value = 0; error.value = ''; message.value = ''
   readVersion++; reading.value = false
 })
 
@@ -44,7 +48,7 @@ async function checkConnection() {
 async function readFile(file?: File) {
   if (!file || active.value) return
   const version = ++readVersion
-  uploaded.value = null; uploadedText.value = ''; result.value = null; job.value = null; error.value = ''; message.value = ''; reading.value = true
+  uploaded.value = null; uploadedText.value = ''; result.value = null; progress.value = []; progressElapsed.value = 0; job.value = null; error.value = ''; message.value = ''; reading.value = true
   try {
     if (!/\.txt$/i.test(file.name) || file.size > 1024 * 1024) throw new Error('请选择不超过 1 MiB 的 UTF-8 TXT 文件。')
     const text = await file.text()
@@ -64,7 +68,7 @@ async function start() {
   if (active.value || !instance.value || !ready.value) return
   const version = ++taskVersion
   pollVersion++
-  submitting.value = true; result.value = null; job.value = null; error.value = ''; message.value = ''; container.value = 0; pollPaused.value = false
+  submitting.value = true; result.value = null; progress.value = []; progressElapsed.value = 0; job.value = null; error.value = ''; message.value = ''; container.value = 0; pollPaused.value = false
   try {
     const text = source.value === 'sample' ? sampleText(sampleId.value) : uploadedText.value
     const submitted = await api.submit(text, { mode: mode.value, ...(mode.value === 'strip' ? { width: width.value } : {}), sizeFactor: sizeFactor.value, timeLimitSeconds: timeLimit.value })
@@ -86,17 +90,23 @@ async function poll() {
     if (!current()) return
     fetchingResult.value = updated.hasResult && !['queued', 'running', 'stopping'].includes(updated.status)
     job.value = updated
-    if (['queued', 'running', 'stopping'].includes(updated.status)) {
-      timer = setTimeout(() => void poll(), 1000)
-      return
-    }
-    if (updated.hasResult) {
+    if (progress.value.length) progressElapsed.value = progressSeconds + (performance.now() - progressAnchor) / 1000
+    const running = ['queued', 'running', 'stopping'].includes(updated.status)
+    if (updated.hasResult && (!running || !result.value || !updated.resultRevision || updated.resultRevision !== result.value.resultRevision)) {
       const computed = await api.result(requestedId, expectedPieces)
       if (!current()) return
       result.value = computed
-      message.value = `${states[updated.status]}。已显示通过几何校验的可行排样；未证明全局最优。`
-    } else message.value = `${states[updated.status]}，没有可显示的有效结果。`
+      const seconds = typeof computed.elapsedSeconds === 'number' ? computed.elapsedSeconds : progressElapsed.value
+      progressSeconds = seconds; progressAnchor = performance.now()
+      progressElapsed.value = seconds
+      progress.value = addProgress(progress.value, seconds, totalArea.value, computed.width, computed.height, computed.containers)
+      container.value = Math.min(container.value, computed.containers - 1)
+    }
+    message.value = result.value
+      ? `${states[updated.status]}。${running ? '已显示当前最优排样，新解出现后自动更新。' : '已显示通过几何校验的可行排样。'}未证明全局最优。`
+      : running ? `${states[updated.status]}，等待首个有效排样。` : `${states[updated.status]}，没有可显示的有效结果。`
     if (updated.error) error.value = updated.error
+    if (running) timer = setTimeout(() => void poll(), 1000)
   } catch (err) {
     if (current()) {
       error.value = (err as Error).message
@@ -148,16 +158,17 @@ onUnmounted(() => { alive = false; clearTimeout(timer); readVersion++ })
         <p v-if="error" role="alert" class="error-message">{{ error }}</p><button v-if="pollPaused" class="text-button" @click="poll">重新查询任务</button>
       </aside>
       <section class="result-panel" aria-labelledby="result-title">
-        <div class="result-header"><h2 id="result-title">{{ result ? '排样结果' : '零件预览' }}</h2><div v-if="result" class="toolbar"><label class="checkbox"><input v-model="labels" type="checkbox" />零件编号</label><button class="outline-button" @click="canvas?.fit()">适应画布</button><button class="outline-button" @click="saveSvg">下载 SVG</button></div></div>
+        <div class="result-header"><h2 id="result-title">{{ result ? (active ? '当前最优排样' : '排样结果') : '零件预览' }}</h2><div v-if="result" class="toolbar"><label class="checkbox"><input v-model="labels" type="checkbox" />零件编号</label><button class="outline-button" @click="canvas?.fit()">适应画布</button><button class="outline-button" @click="saveSvg">下载 SVG</button></div></div>
         <div class="metrics" aria-label="实例指标"><div><span>零件数量</span><strong>{{ pieces.length }}</strong></div><div><span>{{ result ? '材料利用率' : '零件总面积' }}</span><strong>{{ result ? `${utilization.toFixed(1)}%` : numberText(totalArea) }}</strong></div><div><span>{{ result ? (mode === 'strip' ? '使用长度' : '容器数量') : '当前状态' }}</span><strong :class="{ 'text-metric': !result }">{{ result ? (mode === 'strip' ? numberText(result.width) : result.containers) : stateLabel }}</strong><small v-if="result">真实计算 · 已校验</small></div></div>
+        <OptimizationTrend v-if="progress.length" :points="progress" :elapsed="progressElapsed" :running="!!active" :mode="mode" />
         <div v-if="result && mode === 'bin'" class="container-picker"><label for="container">查看容器</label><select id="container" v-model.number="container"><option v-for="i in result.containers" :key="i" :value="i - 1">容器 {{ i }} / {{ result.containers }}</option></select></div>
         <NestingCanvas v-if="result" ref="canvas" :layout="result" :real="true" :container="container" :labels="labels" />
-        <div v-else class="parts-area"><div v-if="!pieces.length" class="empty-state"><h3>从一个实例开始</h3><p>上传 TXT 文件，预览轮廓后开始求解。</p><button class="outline-button" @click="saveTemplate">下载 TXT 模板</button></div><template v-else><div class="parts-caption"><strong>{{ instance?.name }}</strong><span>{{ active ? '任务进行中，完成后显示经过校验的排样。' : '这是输入零件预览，点击“开始求解”运行。' }}</span></div><div class="parts-grid"><figure v-for="piece in pieces" :key="piece.id"><PiecePreview :piece="piece" /><figcaption>零件 {{ piece.id }}<span>面积 {{ numberText(area(piece.polygon)) }}</span></figcaption></figure></div></template></div>
+        <div v-else class="parts-area"><div v-if="!pieces.length" class="empty-state"><h3>从一个实例开始</h3><p>上传 TXT 文件，预览轮廓后开始求解。</p><button class="outline-button" @click="saveTemplate">下载 TXT 模板</button></div><template v-else><div class="parts-caption"><strong>{{ instance?.name }}</strong><span>{{ active ? '任务进行中，得到有效排样后立即显示，并持续更新。' : '这是输入零件预览，点击“开始求解”运行。' }}</span></div><div class="parts-grid"><figure v-for="piece in pieces" :key="piece.id"><PiecePreview :piece="piece" /><figcaption>零件 {{ piece.id }}<span>面积 {{ numberText(area(piece.polygon)) }}</span></figcaption></figure></div></template></div>
         <div class="result-footer"><span class="caption">坐标单位：实例单位</span><button v-if="result" class="text-button" @click="saveJson">下载结果 JSON</button></div><p class="status-message" role="status" aria-live="polite">{{ message || (job ? `${stateLabel} · 任务 ${job.id.slice(0, 8)}` : '') }}</p>
       </section>
     </div><footer class="site-footer">求解器运行于私有服务器。任务与上传数据约保留 24 小时。</footer>
   </main>
-  <dialog ref="help" aria-labelledby="help-title"><div class="dialog-header"><h2 id="help-title">使用说明</h2><button class="icon-button" aria-label="关闭使用说明" @click="help?.close()">×</button></div><ol><li>选择排样模式、实例和参数，点击“开始求解”。内置示例也会实际运行。</li><li>上传支持坐标行 TXT 格式；整数坐标范围 ±10,000，最多 100 种、500 件零件、每件 500 顶点，展开后共 10,000 顶点。</li><li>任务依次排队。求解期间可取消；达到时间上限时，有有效结果则展示当前可行解。</li><li>结果检查数量、形状、容器边界与重叠。展示可行解，不代表已证明全局最优。</li><li>关闭网页不会立即取消任务，任务会按时间上限结束；当前页面关闭后不保留访客会话。</li></ol><button class="primary-button" @click="help?.close()">开始体验</button></dialog>
+  <dialog ref="help" aria-labelledby="help-title"><div class="dialog-header"><h2 id="help-title">使用说明</h2><button class="icon-button" aria-label="关闭使用说明" @click="help?.close()">×</button></div><ol><li>选择排样模式、实例和参数，点击“开始求解”。内置示例也会实际运行。</li><li>上传支持坐标行 TXT 格式；整数坐标范围 ±10,000，最多 100 种、500 件零件、每件 500 顶点，展开后共 10,000 顶点。</li><li>任务依次排队。求解期间显示当前最优排样，并随新解更新；可以取消，结束后保留已有有效结果。</li><li>结果检查数量、形状、容器边界与重叠。展示可行解，不代表已证明全局最优。</li><li>关闭网页不会立即取消任务，任务会按时间上限结束；当前页面关闭后不保留访客会话。</li></ol><button class="primary-button" @click="help?.close()">开始体验</button></dialog>
 </template>
 
 <style scoped>

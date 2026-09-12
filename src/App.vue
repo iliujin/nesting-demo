@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import LiveWorkbench from './components/LiveWorkbench.vue'
 import { loadConfig, type AppConfig } from './lib/api'
 import NestingCanvas from './components/NestingCanvas.vue'
 import PiecePreview from './components/PiecePreview.vue'
+import OptimizationTrend from './components/OptimizationTrend.vue'
+import { demoLayout } from './lib/demo'
 import { area, numberText } from './lib/geometry'
 import { parseInstance } from './lib/instances'
-import { sampleLayout, sampleOptions, sampleText } from './lib/samples'
+import { sampleOptions, sampleText } from './lib/samples'
 import { download, serializeSvg } from './lib/export'
 import type { Instance, Mode } from './types'
 
@@ -21,7 +23,23 @@ const labels = ref(true), container = ref(0), resultVisible = ref(true)
 const uploaded = ref<Instance | null>(null), error = ref(''), message = ref(''), reading = ref(false)
 const help = ref<HTMLDialogElement>(), canvas = ref<InstanceType<typeof NestingCanvas>>()
 let readVersion = 0
-const layout = computed(() => sampleLayout(sampleId.value, mode.value))
+const demoStep = ref(2), playing = ref(false)
+let demoTimer: ReturnType<typeof setInterval> | undefined
+const layout = computed(() => demoLayout(sampleId.value, mode.value, demoStep.value))
+const demoPoints = computed(() => Array.from({ length: demoStep.value + 1 }, (_, i) => {
+  const frame = demoLayout(sampleId.value, mode.value, i)
+  return { seconds: i * 5, utilization: frame.placements.reduce((sum, p) => sum + area(p.polygon), 0) / (frame.width * frame.height * frame.containers) * 100 }
+}))
+function stopDemo() { clearInterval(demoTimer); playing.value = false }
+function playDemo() {
+  stopDemo(); resultVisible.value = true; container.value = 0; demoStep.value = 0; playing.value = true
+  message.value = '正在播放人工合成的优化步骤，不运行求解器。'
+  demoTimer = setInterval(() => {
+    demoStep.value++; container.value = 0
+    if (demoStep.value === 2) { stopDemo(); message.value = '演示播放完成。排样与时间均为示意，不代表求解器性能。' }
+  }, 1600)
+}
+onUnmounted(stopDemo)
 const pieces = computed(() => source.value === 'sample' ? layout.value.placements : uploaded.value?.pieces ?? [])
 const totalArea = computed(() => pieces.value.reduce((sum, p) => sum + area(p.polygon), 0))
 const utilization = computed(() => totalArea.value / (layout.value.width * layout.value.height * layout.value.containers) * 100)
@@ -29,11 +47,13 @@ const showingResult = computed(() => source.value === 'sample' && resultVisible.
 const name = computed(() => source.value === 'sample' ? layout.value.name : uploaded.value?.name ?? '等待选择文件')
 
 watch([mode, sampleId, source], () => {
+  stopDemo(); demoStep.value = 2
   resultVisible.value = false; container.value = 0; message.value = ''; error.value = ''
   readVersion++; reading.value = false
 })
 
 function showExample() {
+  stopDemo(); demoStep.value = 2
   resultVisible.value = true; container.value = 0; canvas.value?.fit()
   message.value = '已载入预计算示例，未执行在线求解。'
 }
@@ -80,10 +100,11 @@ function saveTemplate() { download('nesting-example.txt', sampleText(sampleId.va
   <main id="main">
     <section class="intro" aria-labelledby="title">
       <h1 id="title">让每一块材料，物尽其用。</h1>
-      <p>选择实例，探索二维不规则零件的排样结果。</p>
+      <p>从零件轮廓到排样结果，直观看到材料利用率如何提升。</p>
     </section>
     <div class="notice"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7v1"/></svg><span>示例预览：当前展示预计算结果，真实求解需连接后端服务。</span></div>
 
+    <div class="demo-overview" aria-label="演示功能"><span><b>01</b> 上传轮廓预览</span><span><b>02</b> 两种排样模式</span><span><b>03</b> 利用率提升趋势</span></div>
     <div class="workspace">
       <aside class="settings" aria-labelledby="settings-title">
         <h2 id="settings-title">求解设置</h2>
@@ -115,7 +136,7 @@ function saveTemplate() { download('nesting-example.txt', sampleText(sampleId.va
         <div class="field"><label for="time">运行时间</label><input id="time" readonly value="未运行（示例预览）" /></div>
         <p class="caption angle-note">旋转角度：0° / 90° / 180° / 270°</p>
         <p class="caption settings-note">示例使用固定尺寸。参数调整与真实求解将在后端接入后开放。</p>
-        <button v-if="source === 'sample'" class="primary-button" @click="showExample">查看示例结果</button>
+        <template v-if="source === 'sample'"><button class="primary-button" :disabled="playing" @click="playDemo">{{ playing ? '正在播放演示…' : '播放优化演示' }}</button><button class="outline-button demo-final" @click="showExample">查看示例结果</button><p class="caption">人工合成示例 · 无需连接求解器</p></template>
         <button v-else class="primary-button" disabled>真实求解尚未接入</button>
         <p v-if="error" role="alert" class="error-message">{{ error }}</p>
       </aside>
@@ -134,6 +155,7 @@ function saveTemplate() { download('nesting-example.txt', sampleText(sampleId.va
           <div><span>{{ showingResult ? (mode === 'strip' ? '使用长度' : '容器数量') : '当前状态' }}</span><strong :class="{ 'text-metric': !showingResult }">{{ showingResult ? (mode === 'strip' ? layout.width : layout.containers) : '未求解' }}</strong><small v-if="showingResult">预计算示例</small></div>
         </div>
         <div v-if="showingResult && mode === 'bin'" class="container-picker"><label for="container">查看容器</label><select id="container" v-model.number="container"><option v-for="i in layout.containers" :key="i" :value="i - 1">容器 {{ i }} / {{ layout.containers }}</option></select><span class="caption">利用率按所有容器总面积计算</span></div>
+        <OptimizationTrend v-if="showingResult" :points="demoPoints" :elapsed="demoStep * 5" :running="playing" :mode="mode" illustrative />
         <NestingCanvas v-if="showingResult" ref="canvas" :layout="layout" :container="container" :labels="labels" />
         <div v-else class="parts-area">
           <div v-if="!pieces.length" class="empty-state"><h3>从一个实例开始</h3><p>上传 TXT 文件，即可在这里查看零件轮廓。</p><button class="outline-button" @click="saveTemplate">下载 TXT 模板</button></div>
@@ -143,7 +165,7 @@ function saveTemplate() { download('nesting-example.txt', sampleText(sampleId.va
         <p class="status-message" role="status" aria-live="polite">{{ message }}</p>
       </section>
     </div>
-    <footer class="site-footer">真实求解接入后，算法在私有服务器运行，页面只接收排样结果。</footer>
+    <footer class="site-footer">公开页面仅提供界面演示。求解器源码与程序保留在私有环境，不随本站发布。</footer>
   </main>
 
   <dialog ref="help" aria-labelledby="help-title" @click="($event.target === help) && help?.close()">
@@ -155,3 +177,9 @@ function saveTemplate() { download('nesting-example.txt', sampleText(sampleId.va
   </dialog>
   </template>
 </template>
+
+<style scoped>
+.demo-overview { display: flex; gap: 24px; flex-wrap: wrap; margin: -4px 0 22px; font-size: 13px; color: #526d8d; }
+.demo-overview span { display: flex; align-items: center; gap: 8px; }.demo-overview b { font-size: 11px; color: #1871ac; background: #eef6ff; padding: 5px 7px; border-radius: 5px; }.demo-final { width: 100%; margin: 8px 0; }
+@media (max-width: 600px) { .demo-overview { gap: 9px 15px; font-size: 12px; } }
+</style>

@@ -1,0 +1,36 @@
+import { expect, test } from '@playwright/test'
+
+test('LAN deployment serves its actual configuration and solves through the same origin', async ({ page }) => {
+  const address = process.env.LAN_DEMO_URL
+  test.skip(!address, 'Set LAN_DEMO_URL to verify the actual LAN deployment')
+  test.setTimeout(180000)
+  const errors: string[] = [], apiOrigins: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/v1/')) apiOrigins.push(new URL(request.url()).origin) })
+  await page.goto(address!)
+  await page.getByRole('button', { name: '上传实例', exact: true }).click()
+  await page.getByLabel('上传 TXT 实例').setInputFiles({ name: 'lan-flush.txt', mimeType: 'text/plain',
+    buffer: Buffer.from('name: lan-flush\nsize: 1\nobject: width: 11\nno. quantity\n1 4 x 0 10 10 0\ny 0 0 10 10\n') })
+  await page.getByLabel('容器宽度', { exact: true }).fill('11')
+  await page.getByLabel('运行时间上限').selectOption('30')
+  let resultResponse = page.waitForResponse(response => response.url().endsWith('/result') && response.request().method() === 'GET')
+  await page.getByRole('button', { name: '开始求解', exact: true }).click()
+  let result = await (await resultResponse).json()
+  expect(result).toMatchObject({ mode: 'strip', validated: true, clearance: 0, width: 40, containers: 1 })
+  await expect(page.getByRole('heading', { name: '排样结果', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '固定容器', exact: true }).click()
+  await page.getByLabel('容器尺寸系数').selectOption('2')
+  resultResponse = page.waitForResponse(response => response.url().endsWith('/result') && response.request().method() === 'GET')
+  await page.getByRole('button', { name: '开始求解', exact: true }).click()
+  result = await (await resultResponse).json()
+  expect(result).toMatchObject({ mode: 'bin', validated: true, clearance: 0, width: 20, containers: 1 })
+  expect(result.placements).toHaveLength(4)
+  await expect(page.getByRole('heading', { name: '排样结果', exact: true })).toBeVisible()
+  const download = page.waitForEvent('download')
+  await page.getByRole('button', { name: '下载结果 JSON' }).click()
+  expect((await download).suggestedFilename()).toContain('nesting-result')
+  await page.screenshot({ path: `.qa/lan-${test.info().project.name}.png`, fullPage: true })
+  expect(apiOrigins.length).toBeGreaterThan(0)
+  expect(apiOrigins.every(origin => origin === new URL(address!).origin)).toBe(true)
+  expect(errors).toEqual([])
+})

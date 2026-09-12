@@ -1,13 +1,22 @@
 import type { Layout } from '../types'
 
 export type AppConfig = { mode: 'preview' | 'live'; apiBaseUrl: string }
-export type Job = { id: string; status: 'queued' | 'running' | 'stopping' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'; hasResult: boolean; error?: string | null; startedAt?: number; finishedAt?: number }
+export type Job = { id: string; status: 'queued' | 'running' | 'stopping' | 'completed' | 'failed' | 'cancelled' | 'timed_out' | 'interrupted'; hasResult: boolean; resultRevision?: string | null; error?: string | null; startedAt?: number; finishedAt?: number }
 export type RealResult = Layout & { kind: 'solver_result'; validated: true; jobId?: string; elapsedSeconds?: number; status?: string; [key: string]: unknown }
 
-export function parseConfig(raw: unknown, localDevelopment = false): AppConfig {
+export function parseConfig(raw: unknown, localDevelopment = false, pageOrigin?: string): AppConfig {
   const data = raw as Partial<AppConfig>
   if (data?.mode === 'preview') return { mode: 'preview', apiBaseUrl: '' }
   if (data?.mode !== 'live' || typeof data.apiBaseUrl !== 'string') throw new Error('页面连接配置无效。')
+  if (data.apiBaseUrl === '' && pageOrigin) {
+    const page = new URL(pageOrigin)
+    const octets = page.hostname.split('.').map(Number)
+    const privateAddress = octets.length === 4 && octets.every(n => Number.isInteger(n) && n >= 0 && n <= 255)
+      && (octets[0] === 10 || (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) || (octets[0] === 192 && octets[1] === 168))
+    if (!page.username && !page.password && (page.protocol === 'https:' || (page.protocol === 'http:' && privateAddress)))
+      return { mode: 'live', apiBaseUrl: page.origin }
+    throw new Error('局域网 HTTP 接口必须与页面使用同一内网地址。')
+  }
   const url = new URL(data.apiBaseUrl)
   const loopback = localDevelopment && url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname)
   if ((!loopback && url.protocol !== 'https:') || url.username || url.password || url.search || url.hash) throw new Error('在线服务必须使用不含凭证的 HTTPS 地址。')
@@ -17,7 +26,7 @@ export function parseConfig(raw: unknown, localDevelopment = false): AppConfig {
 export async function loadConfig(): Promise<AppConfig> {
   const response = await fetch(`${import.meta.env.BASE_URL}config.json`, { cache: 'no-store', signal: AbortSignal.timeout(10000) })
   if (!response.ok) throw new Error('无法读取页面连接配置。')
-  return parseConfig(await response.json(), ['localhost', '127.0.0.1'].includes(window.location.hostname))
+  return parseConfig(await response.json(), ['localhost', '127.0.0.1'].includes(window.location.hostname), window.location.origin)
 }
 
 export function parseResult(raw: unknown, expectedPieces: number): RealResult {
